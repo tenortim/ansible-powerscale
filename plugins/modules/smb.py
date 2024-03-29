@@ -75,6 +75,22 @@ options:
     - 4)I(provider_type) can be C(local)/C(file)/C(ads)/C(ldap)/C(nis).
     type: list
     elements: dict
+  run_as_root:
+    description:
+    - List of users who are granted root access to the share.
+    type: list
+    elements: dict
+    suboptions:
+      name:
+        description:
+        - Name of the user/group/wellknown id.
+        type: str
+        required: true
+      type:
+        description:
+        - The type of the host persona (user, group, wellknown).
+        type: str
+        required: true
   access_based_enumeration:
     description:
     - Only enumerates files and folders for the requesting user has access to.
@@ -757,6 +773,16 @@ class SMB(object):
                 smb_share.ca_write_integrity = \
                     self.module.params['ca_write_integrity']
 
+            if self.module.params['run_as_root']:
+                id_list = []
+                for id in self.module.params['run_as_root']:
+                    persona = self.isi_sdk.AuthAccessAccessItemFileGroup(
+                            name=id['name'],
+                            type=id['type']
+                            )
+                    id_list.append(persona)
+                smb_share.run_as_root = id_list
+
             if self.module.params['host_acls']:
                 host_acl_list = []
                 for host_acl in self.module.params['host_acls']:
@@ -922,7 +948,7 @@ class SMB(object):
             params = ['allow_variable_expansion', 'auto_create_directory', 'continuously_available',
                       'file_filter_extensions', 'file_filter_type', 'file_filtering_enabled', 'strict_ca_lockout',
                       'ca_timeout', 'change_notify', 'oplocks', 'impersonate_guest', 'impersonate_user', 'host_acl',
-                      'smb3_encryption_enabled', 'ca_write_integrity']
+                      'run_as_root', 'smb3_encryption_enabled', 'ca_write_integrity']
 
             smb_params = {
                 'name': smb_details['name'],
@@ -1160,11 +1186,21 @@ class SMB(object):
                     if host_acl['access_type'] + ": " + host_acl['name'] not in smb_params["host_acl"]:
                         return True
 
+            if self.module.params["run_as_root"]:
+                # If the number of entries does not match, they must have changed
+                if len(self.module.params["run_as_root"]) != len(smb_params["run_as_root"]):
+                    return True
+                # The following assumes the lists are in the same order. If that is undesired, added sorted()
+                pairs = zip(self.module.params["run_as_root"], smb_params["run_as_root"])
+                if any(x['name'] != y['name'] or x['type'] != y['type'] for x, y in pairs):
+                    return True
+
             to_modify = False
             for param in smb_share_params:
                 if self.module.params[param] and \
                         self.module.params[param] != \
                         smb_params[param]:
+                    LOG.info("param %s does not match - changed=True", param)
                     to_modify = True
 
             if self.module.params['file_filter_extension'] is not None and \
@@ -1198,6 +1234,16 @@ class SMB(object):
             if self.module.params["host_acls"]:
                 for host_acl in self.module.params["host_acls"]:
                     host_acl_list.append(host_acl['access_type'] + ": " + host_acl['name'])
+
+            rar_list = []
+            if self.module.params['run_as_root']:
+                rar_list = []
+                for id in self.module.params['run_as_root']:
+                    persona = self.isi_sdk.AuthAccessAccessItemFileGroup(
+                            name=id['name'],
+                            type=id['type']
+                            )
+                    rar_list.append(persona)
 
             modify_list = []
 
@@ -1239,7 +1285,8 @@ class SMB(object):
                 oplocks=self.module.params['oplocks'],
                 impersonate_guest=self.module.params['impersonate_guest'],
                 impersonate_user=self.module.params['impersonate_user'],
-                host_acl=host_acl_list)
+                host_acl=host_acl_list,
+                run_as_root=rar_list)
 
             smb_share = self.octal_param_update(smb_share)
 
@@ -1441,6 +1488,9 @@ def get_smb_parameters():
         host_acls=dict(type='list', elements='dict',
                        options=dict(name=dict(type='str', required=True),
                                     access_type=dict(type='str', required=True))),
+        run_as_root=dict(type='list', elements='dict',
+                         options=dict(name=dict(type='str', required=True),
+                                    type=dict(type='str', required=True))),
     )
 
 
